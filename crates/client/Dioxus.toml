@@ -1,0 +1,13 @@
+[application]
+name = "Portfolio Manager"
+default_platform = "desktop"
+
+[web.app]
+title = "Portfolio Manager"
+
+[desktop]
+headless = false
+
+[bundle]
+identifier = "com.mycompany.portfolio-manager"
+publisher = "MyCompany"
