@@ -120,12 +120,12 @@ pub fn asset_history(
 
     let rows = statement.query_map([], |row| {
         Ok((
-            row.get::<_, String>(0)?,  // asset_id
-            row.get::<_, String>(1)?,  // fetched_at
-            row.get::<_, f64>(2)?,     // price
-            row.get::<_, f64>(3)?,     // fx_to_cny
-            row.get::<_, f64>(4)?,     // price_cny
-            row.get::<_, String>(5)?,  // source
+            row.get::<_, String>(0)?, // asset_id
+            row.get::<_, String>(1)?, // fetched_at
+            row.get::<_, f64>(2)?,    // price
+            row.get::<_, f64>(3)?,    // fx_to_cny
+            row.get::<_, f64>(4)?,    // price_cny
+            row.get::<_, String>(5)?, // source
         ))
     })?;
 
@@ -146,17 +146,15 @@ pub fn asset_history(
         }
 
         // 同一时间戳下的数据合并到同一个 point
-        let point = points
-            .entry(timestamp.clone())
-            .or_insert_with(|| {
-                json!({
-                    "timestamp": timestamp,
-                    "price_cny": {},
-                    "prices": {},
-                    "fx_to_cny": {},
-                    "sources": {},
-                })
-            });
+        let point = points.entry(timestamp.clone()).or_insert_with(|| {
+            json!({
+                "timestamp": timestamp,
+                "price_cny": {},
+                "prices": {},
+                "fx_to_cny": {},
+                "sources": {},
+            })
+        });
 
         // 始终填充 price_cny（人民币价格）
         point["price_cny"][&asset_id] = json!(price_cny);
@@ -211,7 +209,7 @@ pub fn latest_crypto_prices(database: &Path, symbols: &[String]) -> Result<Value
                     }))
                 },
             )
-            .optional()?;  // 无报价时返回 None 而非报错
+            .optional()?; // 无报价时返回 None 而非报错
 
         if let Some(quote) = quote {
             prices.insert(symbol.clone(), quote);

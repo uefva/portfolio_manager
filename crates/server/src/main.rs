@@ -3,12 +3,12 @@
 //! 本可执行文件只负责加载配置、初始化 SQLite 数据库、启动 Axum HTTP 服务。
 //! 路由处理、数据库迁移、领域操作分别放在独立模块中，便于逐个审查每次变更。
 
-mod api;       // Axum 路由层：定义所有 HTTP 端点
-mod database;  // SQLite 数据库初始化与旧版数据迁移
+mod api; // Axum 路由层：定义所有 HTTP 端点
+mod database; // SQLite 数据库初始化与旧版数据迁移
 mod portfolio; // 资产、交易、持仓与盈亏走势的核心业务逻辑
-mod prices;    // 历史价格查询（只读）
-mod state;     // 共享应用状态与请求 DTO 定义
-mod utils;     // 小工具函数：CSV 解析、时间戳、错误响应格式化
+mod prices; // 历史价格查询（只读）
+mod state; // 共享应用状态与请求 DTO 定义
+mod utils; // 小工具函数：CSV 解析、时间戳、错误响应格式化
 
 use anyhow::Result;
 use state::AppState;
@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
             env::var("RUST_LOG")
                 .unwrap_or_else(|_| "portfolio_server=info,tower_http=info".to_owned()),
         )
-        .with_target(false)  // 不在日志行末尾打印目标模块名，保持简洁
+        .with_target(false) // 不在日志行末尾打印目标模块名，保持简洁
         .init();
 
     // `.env` 是本地开发的可选便利文件；启动本地服务端不需要任何环境变量。

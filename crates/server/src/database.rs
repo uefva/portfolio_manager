@@ -40,8 +40,7 @@ pub fn initialize(database_path: &Path) -> Result<()> {
     let connection = Connection::open(database_path)?;
 
     // 第三步：数据库完整性校验
-    let integrity: String =
-        connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    let integrity: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     anyhow::ensure!(integrity == "ok", "SQLite 完整性校验失败");
     tracing::debug!(%integrity, "SQLite 完整性校验通过");
 

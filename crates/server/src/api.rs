@@ -39,14 +39,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/prices/history", get(prices_history))
         .route("/api/assets/latest", get(assets_latest))
         .route("/api/assets/history", get(assets_history))
-
         // ── 资产 CRUD ──
         .route("/api/portfolio/assets", get(assets).post(asset_create))
         .route(
             "/api/portfolio/assets/:id",
             put(asset_update).delete(asset_delete),
         )
-
         // ── 交易记录 CRUD ──
         .route(
             "/api/portfolio/transactions",
@@ -56,16 +54,13 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/portfolio/transactions/:id",
             put(transaction_update).delete(transaction_delete),
         )
-
         // ── 持仓与盈亏 ──
         .route("/api/portfolio/holdings", get(holdings))
         .route("/api/portfolio/summary", get(summary))
         .route("/api/portfolio/profit-history", get(profit_history))
-
         // ── 导入导出 ──
         .route("/api/portfolio/export", get(export_portfolio))
         .route("/api/portfolio/import", post(import_portfolio))
-
         .with_state(state)
         // 通过 tracing 记录每次请求的方法、路由、状态码和耗时
         .layer(TraceLayer::new_for_http())
@@ -74,7 +69,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // 当前本地优先模式故意允许 Desktop WebView 和开发版 web host 调用同一服务端
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)    // 允许任意来源（仅限本地/内网使用）
+                .allow_origin(Any) // 允许任意来源（仅限本地/内网使用）
                 .allow_methods([
                     Method::GET,
                     Method::POST,
@@ -107,7 +102,7 @@ async fn prices_latest(
 ) -> Response {
     json_result(prices::latest_crypto_prices(
         &state.database_path,
-        &csv(query.symbols),  // 将逗号分隔的符号字符串拆为 Vec
+        &csv(query.symbols), // 将逗号分隔的符号字符串拆为 Vec
     ))
 }
 
@@ -121,7 +116,7 @@ async fn prices_history(
         &state.database_path,
         &csv(query.symbols),
         query.limit,
-        true,  // 默认返回完整字段
+        true, // 默认返回完整字段
     ))
 }
 
@@ -134,7 +129,7 @@ async fn assets_latest(
     json_result(prices::latest_assets(
         &state.database_path,
         &csv(query.asset_ids),
-        &csv(query.categories.or(query.category)),  // 同时兼容 categories 和 category 参数
+        &csv(query.categories.or(query.category)), // 同时兼容 categories 和 category 参数
     ))
 }
 
@@ -148,7 +143,7 @@ async fn assets_history(
         &state.database_path,
         &csv(query.asset_ids),
         query.limit,
-        query.full.as_deref() == Some("1"),  // full=1 时返回原始价格和汇率字段
+        query.full.as_deref() == Some("1"), // full=1 时返回原始价格和汇率字段
     ))
 }
 
@@ -248,10 +243,7 @@ async fn holdings(
 
 /// 查询持仓摘要（只返回汇总数据，不含明细）。
 /// GET /api/portfolio/summary?category=全部
-async fn summary(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<QueryParams>,
-) -> Response {
+async fn summary(State(state): State<Arc<AppState>>, Query(query): Query<QueryParams>) -> Response {
     json_result(
         portfolio::holdings(
             &state.database_path,
@@ -279,8 +271,7 @@ async fn profit_history(
 ) -> Response {
     let metric = query.metric.as_deref().unwrap_or("收益金额");
     json_result(
-        portfolio::profit_history(&state.database_path, metric)
-            .map(|value| json!({"data":value})),
+        portfolio::profit_history(&state.database_path, metric).map(|value| json!({"data":value})),
     )
 }
 

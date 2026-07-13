@@ -40,8 +40,8 @@ async fn main() -> Result<()> {
 
     // 端点选择保持显式，以便 CLI 用法本身就能作为 API 文档
     let path = match cli.command {
-        Command::Health   => "/api/health",
-        Command::Assets   => "/api/portfolio/assets",
+        Command::Health => "/api/health",
+        Command::Assets => "/api/portfolio/assets",
         Command::Holdings => "/api/portfolio/holdings",
     };
 

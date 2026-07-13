@@ -62,11 +62,7 @@ pub fn save_asset(database: &Path, previous_id: Option<String>, input: &Value) -
     // 从输入中提取字段，使用合理的默认值
     let category = input["category"].as_str().unwrap_or("加密货币");
     let market = input["market"].as_str().unwrap_or("CRYPTO");
-    let symbol = input["symbol"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_uppercase();
+    let symbol = input["symbol"].as_str().unwrap_or("").trim().to_uppercase();
     anyhow::ensure!(!symbol.is_empty(), "symbol 不能为空");
 
     // 构造全局唯一 asset_id：类型:市场:代码
@@ -96,7 +92,10 @@ pub fn save_asset(database: &Path, previous_id: Option<String>, input: &Value) -
             "资产已有交易记录，不能修改代码"
         );
         // 删除旧记录（如果 asset_id 变了，旧记录变成孤儿也无妨，上面已校验）
-        connection.execute("DELETE FROM portfolio_assets WHERE asset_id=?", [previous_id])?;
+        connection.execute(
+            "DELETE FROM portfolio_assets WHERE asset_id=?",
+            [previous_id],
+        )?;
     }
 
     // UPSERT：存在则更新 name 和 updated_at，不存在则插入
@@ -106,9 +105,14 @@ pub fn save_asset(database: &Path, previous_id: Option<String>, input: &Value) -
            name=excluded.name, \
            updated_at=excluded.updated_at",
         params![
-            asset_id, category, market, symbol, name, currency,
-            now_text(),  // created_at
-            now_text(),  // updated_at
+            asset_id,
+            category,
+            market,
+            symbol,
+            name,
+            currency,
+            now_text(), // created_at
+            now_text(), // updated_at
         ],
     )?;
 
@@ -243,8 +247,15 @@ pub fn save_transaction(
              (asset_id, type, date, amount, price, total, currency, created_at, updated_at) \
              VALUES(?,?,?,?,?,?,?,?,?)",
             params![
-                asset_id, transaction_type, date, amount, price, total, currency,
-                now_text(), now_text()
+                asset_id,
+                transaction_type,
+                date,
+                amount,
+                price,
+                total,
+                currency,
+                now_text(),
+                now_text()
             ],
         )?;
         connection.last_insert_rowid()
@@ -264,8 +275,7 @@ pub fn save_transaction(
 
 /// 删除交易记录。
 pub fn delete_transaction(database: &Path, id: i64) -> Result<Value> {
-    Connection::open(database)?
-        .execute("DELETE FROM portfolio_transactions WHERE id=?", [id])?;
+    Connection::open(database)?.execute("DELETE FROM portfolio_transactions WHERE id=?", [id])?;
     Ok(json!({"data": {"deleted": true}}))
 }
 
@@ -298,24 +308,23 @@ pub fn holdings(database: &Path, category_filter: &str) -> Result<Value> {
     )?;
 
     let mut rows = Vec::new();
-    let mut total_value = 0.0;   // 总人民币市值
-    let mut total_cost = 0.0;    // 总人民币成本
-    let mut category_totals = Map::new();  // 各类别的汇总
+    let mut total_value = 0.0; // 总人民币市值
+    let mut total_cost = 0.0; // 总人民币成本
+    let mut category_totals = Map::new(); // 各类别的汇总
 
     for result in statement.query_map([], |row| {
         Ok((
-            row.get::<_, String>(0)?,  // asset_id
-            row.get::<_, String>(1)?,  // category
-            row.get::<_, String>(2)?,  // market
-            row.get::<_, String>(3)?,  // symbol
-            row.get::<_, String>(4)?,  // name
-            row.get::<_, String>(5)?,  // currency
-            row.get::<_, f64>(6)?,     // quantity（净持仓量）
-            row.get::<_, f64>(7)?,     // native_cost（原始币种成本）
+            row.get::<_, String>(0)?, // asset_id
+            row.get::<_, String>(1)?, // category
+            row.get::<_, String>(2)?, // market
+            row.get::<_, String>(3)?, // symbol
+            row.get::<_, String>(4)?, // name
+            row.get::<_, String>(5)?, // currency
+            row.get::<_, f64>(6)?,    // quantity（净持仓量）
+            row.get::<_, f64>(7)?,    // native_cost（原始币种成本）
         ))
     })? {
-        let (asset_id, category, market, symbol, name, currency, quantity, native_cost) =
-            result?;
+        let (asset_id, category, market, symbol, name, currency, quantity, native_cost) = result?;
 
         // 跳过零持仓和不属于目标类别的资产
         if quantity <= 0.0 || (category_filter != "全部" && category_filter != category) {
@@ -533,16 +542,15 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
     let connection = Connection::open(database)?;
 
     // 第一步：获取所有去重的报价时间点（按时间升序）
-    let mut timestamp_statement = connection.prepare(
-        "SELECT DISTINCT fetched_at FROM asset_price_history ORDER BY fetched_at",
-    )?;
+    let mut timestamp_statement = connection
+        .prepare("SELECT DISTINCT fetched_at FROM asset_price_history ORDER BY fetched_at")?;
     let timestamps = timestamp_statement
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut labels = Vec::with_capacity(timestamps.len());
-    let mut total_series = Vec::with_capacity(timestamps.len());     // 总资产走势
-    let mut category_series: HashMap<String, Vec<Value>> = HashMap::new();  // 各类别走势
+    let mut total_series = Vec::with_capacity(timestamps.len()); // 总资产走势
+    let mut category_series: HashMap<String, Vec<Value>> = HashMap::new(); // 各类别走势
 
     // 第二步：逐时间点计算
     for (index, timestamp) in timestamps.iter().enumerate() {
@@ -553,10 +561,10 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
         )?;
         let quotes = quote_statement.query_map([timestamp], |row| {
             Ok((
-                row.get::<_, String>(0)?,  // asset_id
-                row.get::<_, String>(1)?,  // category
-                row.get::<_, f64>(2)?,     // price_cny（人民币价格）
-                row.get::<_, f64>(3)?,     // fx_to_cny（汇率）
+                row.get::<_, String>(0)?, // asset_id
+                row.get::<_, String>(1)?, // category
+                row.get::<_, f64>(2)?,    // price_cny（人民币价格）
+                row.get::<_, f64>(3)?,    // fx_to_cny（汇率）
             ))
         })?;
 

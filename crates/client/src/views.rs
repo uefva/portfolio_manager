@@ -141,10 +141,10 @@ pub fn Transactions(
     let market = use_signal(|| "CRYPTO".to_owned());
     let symbol = use_signal(String::new);
     let name = use_signal(String::new);
-    let transaction_type = use_signal(|| "buy".to_owned());  // 默认买入
-    let amount = use_signal(String::new);   // 数量（字符串输入，提交时解析为 f64）
-    let price = use_signal(String::new);    // 单价
-    let date = use_signal(String::new);     // 交易日期（留空则使用当前时间）
+    let transaction_type = use_signal(|| "buy".to_owned()); // 默认买入
+    let amount = use_signal(String::new); // 数量（字符串输入，提交时解析为 f64）
+    let price = use_signal(String::new); // 单价
+    let date = use_signal(String::new); // 交易日期（留空则使用当前时间）
     let rows = transactions();
 
     rsx! {
@@ -222,11 +222,7 @@ pub fn Snapshots(status: Signal<String>, server_url: Signal<String>) -> Element 
 /// 从服务端 GET /api/portfolio/profit-history 获取时序数据，
 /// 使用内嵌 SVG polyline 绘制简易折线图（避免引入重量级图表库）。
 #[component]
-pub fn Chart(
-    status: Signal<String>,
-    server_url: Signal<String>,
-    chart: Signal<Value>,
-) -> Element {
+pub fn Chart(status: Signal<String>, server_url: Signal<String>, chart: Signal<Value>) -> Element {
     // 提取总资产系列的数据点
     let labels = chart()["labels"].as_array().cloned().unwrap_or_default();
     let points = chart()["series"]["总资产"]
@@ -483,9 +479,7 @@ fn export_portfolio(mut status: Signal<String>, server_url: Signal<String>) {
         status.set("正在导出服务端数据…".into());
         match api::get(&url, "/api/portfolio/export").await {
             Ok(value) => {
-                let count = value["assets"]
-                    .as_object()
-                    .map_or(0, |assets| assets.len());
+                let count = value["assets"].as_object().map_or(0, |assets| assets.len());
                 status.set(format!(
                     "服务端导出成功：{count} 项资产（下载文件功能待接入）"
                 ));
@@ -496,11 +490,7 @@ fn export_portfolio(mut status: Signal<String>, server_url: Signal<String>) {
 }
 
 /// 从服务端刷新收益走势数据。
-fn refresh_chart(
-    mut status: Signal<String>,
-    server_url: Signal<String>,
-    mut chart: Signal<Value>,
-) {
+fn refresh_chart(mut status: Signal<String>, server_url: Signal<String>, mut chart: Signal<Value>) {
     let url = server_url();
     spawn(async move {
         status.set("正在加载收益走势…".into());
@@ -537,7 +527,7 @@ fn chart_polyline(values: &[f64], width: f64, height: f64) -> String {
     // 计算 Y 轴范围
     let minimum = values.iter().copied().reduce(f64::min).unwrap_or(0.0);
     let maximum = values.iter().copied().reduce(f64::max).unwrap_or(0.0);
-    let range = (maximum - minimum).max(1.0);  // 防止除以零
+    let range = (maximum - minimum).max(1.0); // 防止除以零
 
     // X 轴步长 = 总宽度 / (点数 - 1)
     let denominator = values.len().saturating_sub(1).max(1) as f64;

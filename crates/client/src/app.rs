@@ -66,9 +66,7 @@ pub fn App() -> Element {
                 chart_result,
             ) {
                 (Ok(holdings_data), Ok(assets_data), Ok(transactions_data), Ok(chart_data)) => {
-                    let holding_count = holdings_data["holdings"]
-                        .as_array()
-                        .map_or(0, Vec::len);
+                    let holding_count = holdings_data["holdings"].as_array().map_or(0, Vec::len);
                     let assets_data = assets_data.as_array().cloned().unwrap_or_default();
                     let transactions_data =
                         transactions_data.as_array().cloned().unwrap_or_default();
