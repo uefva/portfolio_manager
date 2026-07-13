@@ -67,6 +67,25 @@ CREATE TABLE IF NOT EXISTS portfolio_meta (
     updated_at TEXT NOT NULL      -- 最后更新时间
 );
 
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    portfolio_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Immutable results of successful "query latest market price" operations.
+CREATE TABLE IF NOT EXISTS holding_query_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    holdings_json TEXT NOT NULL,
+    total_value REAL NOT NULL,
+    total_profit REAL NOT NULL,
+    queried_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_holding_query_snapshots_queried_at
+    ON holding_query_snapshots(queried_at DESC);
+
 -- -----------------------------------------------------------
 -- 索引：加速常用查询
 -- -----------------------------------------------------------

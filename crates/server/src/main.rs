@@ -3,6 +3,7 @@
 //! 本可执行文件只负责加载配置、初始化 SQLite 数据库、启动 Axum HTTP 服务。
 //! 路由处理、数据库迁移、领域操作分别放在独立模块中，便于逐个审查每次变更。
 
+mod adapter;
 mod api; // Axum 路由层：定义所有 HTTP 端点
 mod database; // SQLite 数据库初始化与旧版数据迁移
 mod portfolio; // 资产、交易、持仓与盈亏走势的核心业务逻辑
@@ -36,7 +37,14 @@ async fn main() -> Result<()> {
     database::initialize(&database_path)?;
 
     // 构建全局共享状态，用 Arc 包装以支持多线程访问
-    let state = Arc::new(AppState { database_path });
+    let state = Arc::new(AppState {
+        database_path,
+        adapter_url: env::var("CPM_ADAPTER_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8786".to_owned()),
+        adapter_token: env::var("CPM_ADAPTER_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty()),
+    });
 
     // 监听地址优先使用环境变量 CPM_BIND，默认绑定本地回环地址
     let address: SocketAddr = env::var("CPM_BIND")

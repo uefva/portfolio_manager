@@ -25,7 +25,7 @@ dx serve -p portfolio-client --no-default-features --features web
 
 客户端启动后会自动从服务端加载以下数据：
 
-- 持仓：`GET /api/portfolio/holdings?category=全部`
+- 持仓：`GET /api/portfolio/holdings?category=all`
 - 资产目录：`GET /api/portfolio/assets`
 - 交易记录：`GET /api/portfolio/transactions`
 - 收益走势：`GET /api/portfolio/profit-history`
@@ -74,6 +74,7 @@ python market_adapter/app.py
 ```text
 GET    /api/health
 GET    /api/symbols
+POST   /api/prices/refresh
 GET    /api/prices/latest?symbols=BTC,ETH
 GET    /api/prices/history?symbols=BTC,ETH&limit=2000
 GET    /api/assets/latest?asset_ids=crypto:CRYPTO:BTC
@@ -87,10 +88,16 @@ GET    /api/portfolio/transactions
 POST   /api/portfolio/transactions
 PUT    /api/portfolio/transactions/{id}
 DELETE /api/portfolio/transactions/{id}
-GET    /api/portfolio/holdings?category=全部
-GET    /api/portfolio/summary?category=全部
-GET    /api/portfolio/profit-history
+GET    /api/portfolio/holdings?category=all
+POST   /api/portfolio/holdings/query
+GET    /api/portfolio/holding-snapshots
+GET    /api/portfolio/holding-snapshots/{id}
+GET    /api/portfolio/summary?category=all
+GET    /api/portfolio/profit-history?from=2026-01-01&to=2026-12-31
 POST   /api/portfolio/import
+GET    /api/portfolio/snapshots
+POST   /api/portfolio/snapshots
+DELETE /api/portfolio/snapshots/{id}
 GET    /api/portfolio/export
 ```
 

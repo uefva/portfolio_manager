@@ -31,6 +31,14 @@ pub async fn post(server_url: &str, path: &str, body: Value) -> Result<Value, St
     request(reqwest::Method::POST, server_url, path, Some(body)).await
 }
 
+pub async fn put(server_url: &str, path: &str, body: Value) -> Result<Value, String> {
+    request(reqwest::Method::PUT, server_url, path, Some(body)).await
+}
+
+pub async fn delete(server_url: &str, path: &str) -> Result<Value, String> {
+    request(reqwest::Method::DELETE, server_url, path, None).await
+}
+
 /// 统一的 HTTP 请求执行器。
 ///
 /// # 错误处理

@@ -53,8 +53,8 @@ pub fn App() -> Element {
         let mut chart = chart;
         spawn(async move {
             // 并行启动四个请求，减少等待时间
-            status.set("正在自动加载持仓、资产、交易和收益走势数据…".to_owned());
-            let holdings_result = api::get(&url, "/api/portfolio/holdings?category=全部").await;
+            status.set("正在联网查询最新市场价，并加载资产、交易和收益走势数据…".to_owned());
+            let holdings_result = api::post(&url, "/api/portfolio/holdings/query", json!({})).await;
             let assets_result = api::get(&url, "/api/portfolio/assets").await;
             let transactions_result = api::get(&url, "/api/portfolio/transactions").await;
             let chart_result = api::get(&url, "/api/portfolio/profit-history").await;
@@ -65,7 +65,8 @@ pub fn App() -> Element {
                 transactions_result,
                 chart_result,
             ) {
-                (Ok(holdings_data), Ok(assets_data), Ok(transactions_data), Ok(chart_data)) => {
+                (Ok(holdings_result), Ok(assets_data), Ok(transactions_data), Ok(chart_data)) => {
+                    let holdings_data = holdings_result["holdings"].clone();
                     let holding_count = holdings_data["holdings"].as_array().map_or(0, Vec::len);
                     let assets_data = assets_data.as_array().cloned().unwrap_or_default();
                     let transactions_data =
@@ -133,7 +134,7 @@ pub fn App() -> Element {
             section { class: "panel",
                 if active_tab() == TAB_HOLDINGS      { Holdings     { status, server_url, holdings } }
                 else if active_tab() == TAB_ASSETS        { Assets       { status, server_url, assets } }
-                else if active_tab() == TAB_TRANSACTIONS  { Transactions { status, server_url, transactions } }
+                else if active_tab() == TAB_TRANSACTIONS  { Transactions { status, server_url, transactions, assets } }
                 else if active_tab() == TAB_SNAPSHOTS     { Snapshots    { status, server_url } }
                 else                                       { Chart        { status, server_url, chart } }
             }

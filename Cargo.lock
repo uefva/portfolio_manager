@@ -3557,11 +3557,13 @@ dependencies = [
 name = "portfolio-client"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dioxus",
  "gloo-net",
  "reqwest",
  "serde",
  "serde_json",
+ "urlencoding",
  "wasm-bindgen-futures",
 ]
 

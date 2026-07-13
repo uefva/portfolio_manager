@@ -28,6 +28,10 @@ pub fn latest_assets(
 ) -> Result<Value> {
     let connection = Connection::open(database)?;
     let mut prices = Map::new();
+    let category_filters = categories
+        .iter()
+        .filter_map(|item| category_code(item))
+        .collect::<Vec<_>>();
 
     // 子查询 latest：获取每个 asset_id 的最新 fetched_at
     // 外层 JOIN：只取时间匹配的记录作为最新报价
@@ -63,17 +67,36 @@ pub fn latest_assets(
     for row in rows {
         let quote = row?;
         let id = quote["asset_id"].as_str().expect("asset_id 必须存在");
-        let category = quote["category"].as_str().expect("category 必须存在");
+        let kind = asset_id_kind(id);
 
         // 应用过滤条件
         if (asset_ids.is_empty() || asset_ids.iter().any(|item| item == id))
-            && (categories.is_empty() || categories.iter().any(|item| item == category))
+            && (category_filters.is_empty() || category_filters.iter().any(|item| *item == kind))
         {
             prices.insert(id.to_owned(), quote);
         }
     }
 
     Ok(json!({"prices": prices}))
+}
+
+fn category_code(category: &str) -> Option<&'static str> {
+    match category.trim().to_ascii_lowercase().as_str() {
+        "all" | "全部" => None,
+        "crypto" | "coin" | "加密货币" | "鍔犲瘑璐у竵" => Some("crypto"),
+        "fund" | "基金" | "鍩洪噾" => Some("fund"),
+        "stock" | "股票" | "鑲＄エ" => Some("stock"),
+        _ => None,
+    }
+}
+
+fn asset_id_kind(asset_id: &str) -> &str {
+    match asset_id.split(':').next().unwrap_or_default() {
+        "crypto" => "crypto",
+        "fund" => "fund",
+        "stock" => "stock",
+        _ => "stock",
+    }
 }
 
 /// 返回按时间聚合的历史价格数据。

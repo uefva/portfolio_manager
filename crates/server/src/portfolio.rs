@@ -48,6 +48,25 @@ pub fn list_assets(database: &Path) -> Result<Value> {
     Ok(json!({"data": assets}))
 }
 
+pub fn active_assets(database: &Path) -> Result<Value> {
+    let connection = Connection::open(database)?;
+    let mut statement = connection.prepare(
+        "SELECT a.asset_id, a.category, a.market, a.symbol, a.name, a.currency \
+         FROM portfolio_assets a JOIN portfolio_transactions t ON t.asset_id=a.asset_id \
+         GROUP BY a.asset_id HAVING sum(CASE WHEN t.type='buy' THEN t.amount ELSE -t.amount END) > 0",
+    )?;
+    let assets = statement
+        .query_map([], |row| {
+            Ok(json!({
+                "asset_id": row.get::<_, String>(0)?, "category": row.get::<_, String>(1)?,
+                "market": row.get::<_, String>(2)?, "symbol": row.get::<_, String>(3)?,
+                "name": row.get::<_, String>(4)?, "currency": row.get::<_, String>(5)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!({"data": assets}))
+}
+
 /// 新增或更新一个资产。
 ///
 /// # 参数
@@ -60,7 +79,8 @@ pub fn list_assets(database: &Path) -> Result<Value> {
 ///   - 如果修改了 category/market/symbol 导致 asset_id 变化，需要有 0 条交易才能执行
 pub fn save_asset(database: &Path, previous_id: Option<String>, input: &Value) -> Result<Value> {
     // 从输入中提取字段，使用合理的默认值
-    let category = input["category"].as_str().unwrap_or("加密货币");
+    let category = canonical_category(input["category"].as_str().unwrap_or("crypto"));
+    let category = category.as_str();
     let market = input["market"].as_str().unwrap_or("CRYPTO");
     let symbol = input["symbol"].as_str().unwrap_or("").trim().to_uppercase();
     anyhow::ensure!(!symbol.is_empty(), "symbol 不能为空");
@@ -194,29 +214,51 @@ pub fn save_transaction(
     input: &Value,
 ) -> Result<Value> {
     // 如果没有提供 asset_id，先创建资产（传 category/market/symbol）
-    let asset_id = match input["asset_id"].as_str() {
-        Some(id) => id.to_owned(),
-        None => save_asset(database, None, input)?["asset_id"]
+    let connection = Connection::open(database)?;
+    let asset_id = match (transaction_id, input["asset_id"].as_str()) {
+        (_, Some(id)) => id.to_owned(),
+        (Some(id), None) => connection.query_row(
+            "SELECT asset_id FROM portfolio_transactions WHERE id=?",
+            [id],
+            |row| row.get(0),
+        )?,
+        (None, None) => save_asset(database, None, input)?["asset_id"]
             .as_str()
             .expect("asset id 已创建")
             .to_owned(),
     };
 
     let transaction_type = input["type"].as_str().unwrap_or("buy");
+    anyhow::ensure!(
+        matches!(transaction_type, "buy" | "sell"),
+        "交易类型必须是 buy 或 sell"
+    );
     let amount = input["amount"].as_f64().context("amount 不能为空")?;
     let price = input["price"].as_f64().context("price 不能为空")?;
     anyhow::ensure!(amount > 0.0 && price >= 0.0, "数量或价格无效");
 
-    let connection = Connection::open(database)?;
-
     // 卖出校验：计算当前持仓量（买入总和 - 卖出总和）
     if transaction_type == "sell" {
-        let units: f64 = connection.query_row(
+        let mut units: f64 = connection.query_row(
             "SELECT coalesce(sum(CASE WHEN type='buy' THEN amount ELSE -amount END), 0) \
              FROM portfolio_transactions WHERE asset_id=?",
             [&asset_id],
             |row| row.get(0),
         )?;
+        if let Some(id) = transaction_id {
+            let previous: Option<(String, f64)> = connection
+                .query_row(
+                    "SELECT type, amount FROM portfolio_transactions WHERE id=?",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((previous_type, previous_amount)) = previous {
+                if previous_type == "sell" {
+                    units += previous_amount;
+                }
+            }
+        }
         anyhow::ensure!(units >= amount, "卖出数量超过当前持仓");
     }
 
@@ -228,16 +270,29 @@ pub fn save_transaction(
     )?;
 
     // 日期默认使用当前 UTC 时间
-    let date = input["date"].as_str().unwrap_or(&now_text()).to_owned();
+    let date = input["date"]
+        .as_str()
+        .unwrap_or(&now_text())
+        .replace('T', " ");
     let total = amount * price;
 
     let id = if let Some(id) = transaction_id {
         // 更新已有交易记录
         connection.execute(
             "UPDATE portfolio_transactions \
-             SET type=?, date=?, amount=?, price=?, total=?, updated_at=? \
+             SET asset_id=?, type=?, date=?, amount=?, price=?, total=?, currency=?, updated_at=? \
              WHERE id=?",
-            params![transaction_type, date, amount, price, total, now_text(), id],
+            params![
+                asset_id,
+                transaction_type,
+                date,
+                amount,
+                price,
+                total,
+                currency,
+                now_text(),
+                id
+            ],
         )?;
         id
     } else {
@@ -279,6 +334,84 @@ pub fn delete_transaction(database: &Path, id: i64) -> Result<Value> {
     Ok(json!({"data": {"deleted": true}}))
 }
 
+pub fn create_snapshot(database: &Path, name: &str) -> Result<Value> {
+    let name = name.trim();
+    anyhow::ensure!(!name.is_empty(), "快照名称不能为空");
+    let portfolio = export_json(database)?;
+    let created_at = now_text();
+    let connection = Connection::open(database)?;
+    connection.execute(
+        "INSERT INTO portfolio_snapshots(name, portfolio_json, created_at) VALUES(?,?,?)",
+        params![name, serde_json::to_string(&portfolio)?, created_at],
+    )?;
+    Ok(
+        json!({"data": {"id": connection.last_insert_rowid(), "name": name, "created_at": created_at}}),
+    )
+}
+
+pub fn list_snapshots(database: &Path) -> Result<Value> {
+    let connection = Connection::open(database)?;
+    let mut statement = connection.prepare(
+        "SELECT id, name, portfolio_json, created_at FROM portfolio_snapshots ORDER BY id DESC",
+    )?;
+    let snapshots = statement
+        .query_map([], |row| {
+            let serialized: String = row.get(2)?;
+            let portfolio = serde_json::from_str::<Value>(&serialized).unwrap_or(Value::Null);
+            Ok(json!({
+                "id": row.get::<_, i64>(0)?, "name": row.get::<_, String>(1)?,
+                "portfolio": portfolio, "created_at": row.get::<_, String>(3)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!({"data": snapshots}))
+}
+
+pub fn delete_snapshot(database: &Path, id: i64) -> Result<Value> {
+    Connection::open(database)?.execute("DELETE FROM portfolio_snapshots WHERE id=?", [id])?;
+    Ok(json!({"data": {"deleted": true}}))
+}
+
+pub fn save_holding_query_snapshot(database: &Path, holdings: &Value) -> Result<Value> {
+    let queried_at = now_text();
+    let total_value = holdings["total_value"].as_f64().unwrap_or_default();
+    let total_profit = holdings["total_profit"].as_f64().unwrap_or_default();
+    let connection = Connection::open(database)?;
+    connection.execute(
+        "INSERT INTO holding_query_snapshots(holdings_json,total_value,total_profit,queried_at) VALUES(?,?,?,?)",
+        params![serde_json::to_string(holdings)?, total_value, total_profit, queried_at],
+    )?;
+    Ok(
+        json!({"id": connection.last_insert_rowid(), "queried_at": queried_at, "total_value": total_value, "total_profit": total_profit}),
+    )
+}
+
+pub fn list_holding_query_snapshots(database: &Path) -> Result<Value> {
+    let connection = Connection::open(database)?;
+    let mut statement = connection.prepare(
+        "SELECT id, total_value, total_profit, queried_at FROM holding_query_snapshots ORDER BY id DESC",
+    )?;
+    let items = statement
+        .query_map([], |row| {
+            Ok(json!({
+                "id": row.get::<_, i64>(0)?, "total_value": row.get::<_, f64>(1)?,
+                "total_profit": row.get::<_, f64>(2)?, "queried_at": row.get::<_, String>(3)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!({"data": items}))
+}
+
+pub fn holding_query_snapshot(database: &Path, id: i64) -> Result<Value> {
+    let connection = Connection::open(database)?;
+    let serialized: String = connection.query_row(
+        "SELECT holdings_json FROM holding_query_snapshots WHERE id=?",
+        [id],
+        |row| row.get(0),
+    )?;
+    Ok(json!({"data": serde_json::from_str::<Value>(&serialized)?}))
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 持仓计算
 // ═══════════════════════════════════════════════════════════════
@@ -296,6 +429,7 @@ pub fn delete_transaction(database: &Path, id: i64) -> Result<Value> {
 /// * `category_filter` - 类别过滤，"全部" 表示不过滤
 pub fn holdings(database: &Path, category_filter: &str) -> Result<Value> {
     let connection = Connection::open(database)?;
+    let category_filter = category_filter_code(category_filter);
 
     // 查询每个资产的净持仓量和原始币种成本
     let mut statement = connection.prepare(
@@ -324,10 +458,11 @@ pub fn holdings(database: &Path, category_filter: &str) -> Result<Value> {
             row.get::<_, f64>(7)?,    // native_cost（原始币种成本）
         ))
     })? {
-        let (asset_id, category, market, symbol, name, currency, quantity, native_cost) = result?;
+        let (asset_id, _category, market, symbol, name, currency, quantity, native_cost) = result?;
 
         // 跳过零持仓和不属于目标类别的资产
-        if quantity <= 0.0 || (category_filter != "全部" && category_filter != category) {
+        let kind = asset_id_kind(&asset_id);
+        if quantity <= 0.0 || category_filter.is_some_and(|filter| filter != kind) {
             continue;
         }
 
@@ -355,7 +490,7 @@ pub fn holdings(database: &Path, category_filter: &str) -> Result<Value> {
 
         // 更新类别汇总
         category_totals.insert(
-            category.clone(),
+            kind.to_owned(),
             json!({
                 "total_value":  value_cny,
                 "total_cost":   cost_cny,
@@ -366,7 +501,7 @@ pub fn holdings(database: &Path, category_filter: &str) -> Result<Value> {
         // 构建单条持仓明细
         rows.push(json!({
             "asset_id":    asset_id,
-            "category":    category,
+            "category":    canonical_category(kind),
             "market":      market,
             "symbol":      symbol,
             "name":        name,
@@ -538,8 +673,27 @@ pub fn import_json(database: &Path, portfolio: Value) -> Result<Value> {
 ///   "metric": "收益金额"
 /// }
 /// ```
-pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
+pub fn profit_history(
+    database: &Path,
+    metric: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Value> {
     let connection = Connection::open(database)?;
+    let from = from.map(|value| {
+        if value.len() == 10 {
+            format!("{value} 00:00:00")
+        } else {
+            value.to_owned()
+        }
+    });
+    let to = to.map(|value| {
+        if value.len() == 10 {
+            format!("{value} 23:59:59")
+        } else {
+            value.to_owned()
+        }
+    });
 
     // 第一步：获取所有去重的报价时间点（按时间升序）
     let mut timestamp_statement = connection
@@ -553,7 +707,16 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
     let mut category_series: HashMap<String, Vec<Value>> = HashMap::new(); // 各类别走势
 
     // 第二步：逐时间点计算
-    for (index, timestamp) in timestamps.iter().enumerate() {
+    for timestamp in &timestamps {
+        if from
+            .as_deref()
+            .is_some_and(|value| timestamp.as_str() < value)
+            || to
+                .as_deref()
+                .is_some_and(|value| timestamp.as_str() > value)
+        {
+            continue;
+        }
         // 获取该时间点的所有资产报价
         let mut quote_statement = connection.prepare(
             "SELECT asset_id, category, price_cny, fx_to_cny \
@@ -574,7 +737,7 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
 
         // 第三步：对每个有报价的资产，计算截至该时间点的持仓价值
         for quote in quotes {
-            let (asset_id, category, price_cny, fx_to_cny) = quote?;
+            let (asset_id, _category, price_cny, fx_to_cny) = quote?;
 
             // 累计该时间点之前（含当日）的净持仓量
             let (quantity, native_cost): (f64, f64) = connection.query_row(
@@ -597,7 +760,9 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
             total_cost += cost_cny;
 
             // 按类别汇总
-            let total = category_totals.entry(category).or_insert((0.0, 0.0));
+            let total = category_totals
+                .entry(asset_id_kind(&asset_id).to_owned())
+                .or_insert((0.0, 0.0));
             total.0 += value_cny;
             total.1 += cost_cny;
         }
@@ -605,21 +770,21 @@ pub fn profit_history(database: &Path, metric: &str) -> Result<Value> {
         // 第四步：将计算结果推入时间序列
         labels.push(timestamp.clone());
         total_series.push(json!([
-            index,
+            labels.len() - 1,
             metric_value(total_value - total_cost, total_cost, metric)
         ]));
 
         for (category, (value, cost)) in category_totals {
-            category_series
-                .entry(category)
-                .or_default()
-                .push(json!([index, metric_value(value - cost, cost, metric)]));
+            category_series.entry(category).or_default().push(json!([
+                labels.len() - 1,
+                metric_value(value - cost, cost, metric)
+            ]));
         }
     }
 
     // 组装返回结构
     let mut series = Map::new();
-    series.insert("总资产".to_owned(), Value::Array(total_series));
+    series.insert("total".to_owned(), Value::Array(total_series));
     for (category, points) in category_series {
         series.insert(category, Value::Array(points));
     }
@@ -658,13 +823,7 @@ fn metric_value(profit: f64, cost: f64, metric: &str) -> f64 {
 /// - 基金     → fund
 /// - 其他     → stock（股票）
 fn asset_kind(category: &str) -> &'static str {
-    if category == "加密货币" {
-        "crypto"
-    } else if category == "基金" {
-        "fund"
-    } else {
-        "stock"
-    }
+    category_code_from_text(category).unwrap_or("stock")
 }
 
 /// 根据资产类别和交易市场，推断结算币种。
@@ -674,9 +833,185 @@ fn asset_kind(category: &str) -> &'static str {
 fn currency_for(category: &str, market: &str) -> &'static str {
     if market == "HK" {
         "HKD"
-    } else if market == "SH" || market == "SZ" || category == "基金" {
+    } else if market == "SH" || market == "SZ" || asset_kind(category) == "fund" {
         "CNY"
     } else {
         "USD"
+    }
+}
+
+fn canonical_category(category: &str) -> String {
+    match category_code_from_text(category).unwrap_or("crypto") {
+        "crypto" => "加密货币".to_owned(),
+        "fund" => "基金".to_owned(),
+        "stock" => "股票".to_owned(),
+        _ => "加密货币".to_owned(),
+    }
+}
+
+fn category_filter_code(category: &str) -> Option<&'static str> {
+    let value = category.trim().to_ascii_lowercase();
+    if value.is_empty() || matches!(value.as_str(), "all" | "全部") {
+        None
+    } else {
+        category_code_from_text(category)
+    }
+}
+
+fn category_code_from_text(category: &str) -> Option<&'static str> {
+    let value = category.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "all" | "全部" => None,
+        "crypto" | "coin" | "加密货币" | "鍔犲瘑璐у竵" => Some("crypto"),
+        "fund" | "基金" | "鍩洪噾" => Some("fund"),
+        "stock" | "股票" | "鑲＄エ" => Some("stock"),
+        _ => None,
+    }
+}
+
+fn asset_id_kind(asset_id: &str) -> &str {
+    match asset_id.split(':').next().unwrap_or_default() {
+        "crypto" => "crypto",
+        "fund" => "fund",
+        "stock" => "stock",
+        _ => "stock",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database;
+    use std::{fs, path::PathBuf};
+
+    fn database_path() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "portfolio-manager-test-{}-{}.sqlite3",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::File::create(&path).unwrap();
+        database::initialize(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn asset_transaction_holdings_export_import_and_snapshots_work() {
+        let database = database_path();
+        let asset = save_asset(
+            &database,
+            None,
+            &json!({
+                "category":"加密货币", "market":"CRYPTO", "symbol":"btc", "name":"Bitcoin"
+            }),
+        )
+        .unwrap();
+        let asset_id = asset["asset_id"].as_str().unwrap();
+        let buy = save_transaction(
+            &database,
+            None,
+            &json!({
+                "asset_id":asset_id, "type":"buy", "amount":2.0, "price":100.0, "date":"2026-01-01"
+            }),
+        )
+        .unwrap();
+        let sell = save_transaction(
+            &database,
+            None,
+            &json!({
+                "asset_id":asset_id, "type":"sell", "amount":0.5, "price":150.0, "date":"2026-01-02"
+            }),
+        )
+        .unwrap();
+        save_transaction(
+            &database,
+            Some(sell["id"].as_i64().unwrap()),
+            &json!({
+                "type":"sell", "amount":1.0, "price":160.0, "date":"2026-01-03"
+            }),
+        )
+        .unwrap();
+        assert!(save_transaction(
+            &database,
+            None,
+            &json!({
+                "asset_id":asset_id, "type":"sell", "amount":2.0, "price":1.0
+            })
+        )
+        .is_err());
+
+        Connection::open(&database).unwrap().execute(
+            "INSERT INTO asset_price_history(asset_id,category,market,symbol,name,currency,price,fx_to_cny,price_cny,source,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            params![asset_id, "加密货币", "CRYPTO", "BTC", "Bitcoin", "USD", 200.0, 7.0, 1400.0, "test", "2026-01-04 00:00:00"],
+        ).unwrap();
+        let holdings = holdings(&database, "全部").unwrap();
+        assert_eq!(holdings["holdings"][0]["quantity"], 1.0);
+        assert_eq!(holdings["holdings"][0]["value_cny"], 1400.0);
+        let first_snapshot = save_holding_query_snapshot(&database, &holdings).unwrap();
+        let second_snapshot = save_holding_query_snapshot(&database, &holdings).unwrap();
+        assert_ne!(first_snapshot["id"], second_snapshot["id"]);
+        let history = list_holding_query_snapshots(&database).unwrap();
+        assert_eq!(history["data"].as_array().unwrap().len(), 2);
+        let restored =
+            holding_query_snapshot(&database, first_snapshot["id"].as_i64().unwrap()).unwrap();
+        assert_eq!(restored["data"], holdings);
+
+        let exported = export_json(&database).unwrap();
+        assert!(exported["assets"].is_object());
+        create_snapshot(&database, "before import").unwrap();
+        assert_eq!(
+            list_snapshots(&database).unwrap()["data"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let imported = import_json(&database, exported.clone()).unwrap();
+        assert_eq!(imported["transactions_imported"], 0);
+        delete_transaction(&database, buy["id"].as_i64().unwrap()).unwrap();
+        fs::remove_file(database).unwrap();
+    }
+
+    #[test]
+    fn asset_cannot_be_deleted_when_transactions_exist() {
+        let database = database_path();
+        let asset = save_asset(&database, None, &json!({"symbol":"ETH"})).unwrap();
+        let id = asset["asset_id"].as_str().unwrap();
+        save_transaction(
+            &database,
+            None,
+            &json!({"asset_id":id,"type":"buy","amount":1.0,"price":1.0}),
+        )
+        .unwrap();
+        assert!(delete_asset(&database, id).is_err());
+        fs::remove_file(database).unwrap();
+    }
+
+    #[test]
+    fn profit_history_honors_inclusive_date_range() {
+        let database = database_path();
+        let asset = save_asset(&database, None, &json!({"symbol":"BTC"})).unwrap();
+        let id = asset["asset_id"].as_str().unwrap();
+        save_transaction(
+            &database,
+            None,
+            &json!({"asset_id":id,"type":"buy","amount":1.0,"price":10.0,"date":"2026-01-01"}),
+        )
+        .unwrap();
+        let connection = Connection::open(&database).unwrap();
+        for (time, price) in [("2026-01-01 00:00:00", 10.0), ("2026-01-10 00:00:00", 20.0)] {
+            connection.execute("INSERT INTO asset_price_history(asset_id,category,market,symbol,name,currency,price,fx_to_cny,price_cny,source,fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", params![id, "加密货币", "CRYPTO", "BTC", "BTC", "USD", price, 1.0, price, "test", time]).unwrap();
+        }
+        let chart = profit_history(
+            &database,
+            "收益金额",
+            Some("2026-01-05"),
+            Some("2026-01-10"),
+        )
+        .unwrap();
+        assert_eq!(chart["labels"].as_array().unwrap().len(), 1);
+        assert_eq!(chart["labels"][0], "2026-01-10 00:00:00");
+        drop(connection);
+        fs::remove_file(database).unwrap();
     }
 }
